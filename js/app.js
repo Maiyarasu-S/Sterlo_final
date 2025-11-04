@@ -11,18 +11,28 @@ function handleRouting() {
   const activeSection = document.getElementById(route + "Page");
   if (activeSection) activeSection.classList.remove("d-none");
 
-  // Update sidebar active state
+  // Update active state (both sidebar and mobile)
   document.querySelectorAll("[data-route]").forEach(link => {
-    link.classList.toggle("active", link.dataset.route === route);
+    const isActive = link.dataset.route === route;
+    link.classList.toggle("active", isActive);
+    if (isActive) {
+      link.setAttribute("aria-current", "page");
+    } else {
+      link.removeAttribute("aria-current");
+    }
   });
+
+  // Close mobile collapse after navigation (if open)
+  closeMobileNav();
 
   // View-specific hooks
   if (route === "home") {
     renderAppointmentsTable();
+    updateDashboardStats();           // keep stat cards fresh
     initSearch();
     initTableActions();
     const btn = document.getElementById("btnExportCsv");
-    if (btn) btn.onclick = exportAppointmentsCSV; // avoid stacking listeners
+    if (btn) btn.onclick = exportAppointmentsCSV;
   } else if (route === "appointment") {
     initAppointmentForm();
   } else if (route === "records") {
@@ -38,7 +48,37 @@ function setupRouting() {
   if (newRegBtn) {
     newRegBtn.addEventListener("click", () => { window.location.hash = "register"; });
   }
+
+  // Wire up mobile nav interactions
+  wireMobileNav();
+
+  // Router
   window.addEventListener("hashchange", handleRouting);
+}
+
+// ===========================
+// MOBILE NAV HELPERS
+// ===========================
+function wireMobileNav() {
+  const mobileNav = document.getElementById("mobileNav");
+  if (!mobileNav) return;
+
+  // When a mobile link is clicked, navigate (hash) and close the collapse
+  mobileNav.querySelectorAll("a[data-route]").forEach(a => {
+    a.addEventListener("click", () => {
+      closeMobileNav();
+    });
+  });
+}
+
+function closeMobileNav() {
+  const el = document.getElementById("mobileNav");
+  if (!el) return;
+  const isShown = el.classList.contains("show");
+  if (isShown) {
+    const inst = bootstrap.Collapse.getOrCreateInstance(el, { toggle: false });
+    inst.hide();
+  }
 }
 
 // ===========================
@@ -47,9 +87,32 @@ function setupRouting() {
 function toast(msg) {
   const el = document.getElementById('toast');
   const body = document.getElementById('toastBody');
-  if (!el || !body) { alert(msg); return; } // fallback if toast missing
+  if (!el || !body) { alert(msg); return; }
   body.textContent = msg;
   new bootstrap.Toast(el).show();
+}
+
+// ===========================
+// DASHBOARD STATS (HOME)
+// ===========================
+function updateDashboardStats() {
+  const appts = storageAPI.getAppointments();
+  const patients = storageAPI.getPatients();
+  const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+  const total = appts.length;
+  const todayCount = appts.filter(a => a.date === todayStr).length;
+  const upcoming = appts.filter(a => a.date > todayStr).length; // ISO compare
+
+  const setText = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+
+  setText("totalAppts", total);
+  setText("upcomingAppts", upcoming);
+  setText("todayAppts", todayCount);
+  setText("totalPatients", patients.length);
 }
 
 // ===========================
@@ -62,39 +125,49 @@ function handlePatientForm() {
   form.addEventListener("submit", (e) => {
     e.preventDefault();
 
-    // values
-    const name = document.getElementById("name").value;
-    const age = document.getElementById("age").value;
-    const gender = document.getElementById("gender").value;
-    const contact = document.getElementById("contact").value;
-    const email = document.getElementById("email").value;
-    const address = document.getElementById("address").value;
+    const firstName = document.getElementById("firstName").value.trim();
+    const lastName  = document.getElementById("lastName").value.trim();
+    const age       = document.getElementById("age").value;
+    const gender    = document.getElementById("gender").value;
+    const address   = document.getElementById("address").value.trim();
+    const city      = document.getElementById("city").value.trim();
+    const state     = document.getElementById("state").value.trim();
+    const pincode   = document.getElementById("pincode").value.trim();
+    const bloodGroup= document.getElementById("bloodGroup").value.trim();
+    const contact   = document.getElementById("contact").value.trim();
+    const email     = document.getElementById("email").value.trim();
 
-    // validate
-    if (!validator.name(name)) return toast("Enter a valid name");
-    if (!validator.age(age)) return toast("Age must be greater than 0");
-    if (!validator.gender(gender)) return toast("Please select gender");
-    if (!validator.contact(contact)) return toast("Contact must be 10 digits");
-    if (!validator.email(email)) return toast("Enter a valid email");
+    // Validation
+    if (!validator.name(firstName)) return toast("Enter a valid first name");
+    if (!validator.age(age))        return toast("Enter valid age");
+    if (!validator.gender(gender))  return toast("Select gender");
+    if (!validator.contact(contact))return toast("Enter 10-digit contact");
+    if (!validator.email(email || "")) return toast("Enter a valid email");
+    if (!/^\d{6}$/.test(pincode))   return toast("Enter valid 6-digit pincode");
+    if (!bloodGroup)                return toast("Select blood group");
 
-    // Duplicate check (optional tiny guard)
-    const existing = storageAPI.getPatients().find(p =>
-      p.name.trim().toLowerCase() === name.trim().toLowerCase() &&
-      p.contact.trim() === contact.trim()
-    );
-    if (existing) return toast("A patient with the same name & contact already exists");
+    const fullAddress = `${address}, ${city}, ${state} - ${pincode}`;
 
-    // save
     const patients = storageAPI.getPatients();
     const newPatient = {
       id: storageAPI.uid("p"),
-      name, age, gender, contact, email, address,
+      firstName,
+      lastName,
+      name: `${firstName} ${lastName}`,
+      age,
+      gender,
+      contact,
+      email,
+      address: fullAddress,
+      city,
+      state,
+      pincode,
+      bloodGroup,
       createdAt: new Date().toISOString(),
     };
+
     patients.push(newPatient);
     storageAPI.setPatients(patients);
-
-    // remember last registered patient
     localStorage.setItem("lastRegisteredPatientId", newPatient.id);
 
     toast(`Patient Registered! ID: ${newPatient.id}`);
@@ -181,17 +254,17 @@ function handleApptFormSubmit() {
     e.preventDefault();
 
     const patientId = document.getElementById("patientSelect").value;
-    const deptId = document.getElementById("deptSelect").value;
-    const doctorId = document.getElementById("doctorSelect").value;
-    const dateStr = document.getElementById("apptDate").value;
-    const timeStr = document.getElementById("timeSelect").value;
+    const deptId    = document.getElementById("deptSelect").value;
+    const doctorId  = document.getElementById("doctorSelect").value;
+    const dateStr   = document.getElementById("apptDate").value;
+    const timeStr   = document.getElementById("timeSelect").value;
 
     if (!patientId) return toast("Select patient");
-    if (!deptId) return toast("Select department");
-    if (!doctorId) return toast("Select doctor");
-    if (!dateStr) return toast("Select date");
+    if (!deptId)    return toast("Select department");
+    if (!doctorId)  return toast("Select doctor");
+    if (!dateStr)   return toast("Select date");
     if (!isFutureDate(dateStr)) return toast("Date must be today or future");
-    if (!timeStr) return toast("Select a time slot");
+    if (!timeStr)   return toast("Select a time slot");
     if (isSlotTaken(doctorId, dateStr, timeStr)) return toast("This slot is already booked for the doctor");
 
     const appts = storageAPI.getAppointments();
@@ -206,7 +279,7 @@ function handleApptFormSubmit() {
 
     toast("Appointment booked!");
     form.reset();
-    window.location.hash = "home";
+    window.location.hash = "home"; // routing will refresh stats
   };
 }
 
@@ -391,6 +464,7 @@ function saveEditChanges(modal) {
 
   modal.hide();
   renderAppointmentsTable();
+  updateDashboardStats(); // refresh counts after edit
   toast("Appointment updated!");
 }
 function openDeleteModal(id) {
@@ -404,6 +478,7 @@ function openDeleteModal(id) {
     storageAPI.setAppointments(newList);
     modal.hide();
     renderAppointmentsTable();
+    updateDashboardStats(); // refresh counts after delete
     toast("Appointment deleted!");
   };
 }
@@ -412,7 +487,7 @@ function openDeleteModal(id) {
 // RECORDS: PATIENTS TABLE
 // ===========================
 function renderPatientsTable(filterText = "") {
-  // Guard: if no filter passed, respect the live value in the input (if present)
+  // If no filter passed, respect the live value in the input (if present)
   if (!filterText) {
     const input = document.getElementById("patientSearch");
     if (input && typeof input.value === "string") {
@@ -453,29 +528,23 @@ function renderPatientsTable(filterText = "") {
   `).join("");
 }
 
-// Re-entry-safe, local binding for the Records search box
+// Re-entry-safe Records search
 function initPatientSearch() {
   const box = document.getElementById("patientSearch");
   if (!box) return;
 
-  // Clean previous listeners if re-entering the route
   if (box._onInput) box.removeEventListener("input", box._onInput);
   if (box._onChange) box.removeEventListener("change", box._onChange);
 
-  const handler = () => {
-    const q = (box.value || "").trim();
-    renderPatientsTable(q);
-  };
+  const handler = () => renderPatientsTable(box.value || "");
 
   box.addEventListener("input", handler);
   box.addEventListener("change", handler);
 
-  // Stash for cleanup next time
   box._onInput = handler;
   box._onChange = handler;
 
-  // Initial render using current text (preserves filter on back/forward)
-  handler();
+  handler(); // initial render using current query
 }
 
 function initPatientActions() {
@@ -492,52 +561,141 @@ function initPatientActions() {
     else if (action === "bookings") openPatientBookingsModal(id);
   });
 }
+
+// ===== Enhanced Edit Patient – mirrors Registration fields =====
 function openPatientEditModal(id) {
   const pts = storageAPI.getPatients();
   const p = pts.find(x => x.id === id);
   if (!p) return toast("Patient not found");
 
-  document.getElementById("editPid").value = p.id;
-  document.getElementById("editName").value = p.name || "";
-  document.getElementById("editAge").value = p.age || "";
-  document.getElementById("editGender").value = p.gender || "";
-  document.getElementById("editContact").value = p.contact || "";
-  document.getElementById("editEmail").value = p.email || "";
-  document.getElementById("editAddress").value = p.address || "";
+  // Detect which edit modal fields exist (new detailed vs legacy single-name)
+  const hasDetailedFields = !!document.getElementById("editFirstName");
+
+  if (hasDetailedFields) {
+    // Fallbacks for older records:
+    const firstName = p.firstName || (p.name ? p.name.split(" ")[0] : "");
+    const lastName  = p.lastName  || (p.name ? p.name.split(" ").slice(1).join(" ") : "");
+
+    const addressLine = (p.address || "").replace(/\s*-\s*\d{6}\s*$/, ""); // strip trailing "- pincode"
+    const city  = p.city  || "";
+    const state = p.state || "";
+    const pincode =
+      p.pincode ||
+      ((p.address || "").match(/\b(\d{6})\b/)?.[1] || "");
+
+    document.getElementById("editPid").value = p.id;
+    document.getElementById("editFirstName").value = firstName;
+    document.getElementById("editLastName").value  = lastName;
+    document.getElementById("editAge").value = p.age || "";
+    document.getElementById("editGender").value = p.gender || "";
+    document.getElementById("editAddress").value = addressLine || "";
+    document.getElementById("editCity").value  = city;
+    document.getElementById("editState").value = state;
+    document.getElementById("editPincode").value = pincode;
+    document.getElementById("editBloodGroup").value = p.bloodGroup || "";
+    document.getElementById("editContact").value = p.contact || "";
+    document.getElementById("editEmail").value   = p.email || "";
+  } else {
+    // Legacy modal (single Name + Address fields)
+    document.getElementById("editPid").value    = p.id;
+    document.getElementById("editName").value   = p.name || "";
+    document.getElementById("editAge").value    = p.age || "";
+    document.getElementById("editGender").value = p.gender || "";
+    document.getElementById("editContact").value= p.contact || "";
+    document.getElementById("editEmail").value  = p.email || "";
+    document.getElementById("editAddress").value= p.address || "";
+  }
 
   const modal = new bootstrap.Modal(document.getElementById("patientEditModal"));
   modal.show();
 
   document.getElementById("savePatientEditBtn").onclick = () => savePatientEdit(modal);
 }
+
 function savePatientEdit(modal) {
-  const id = document.getElementById("editPid").value;
-  const name = document.getElementById("editName").value;
-  const age = document.getElementById("editAge").value;
-  const gender = document.getElementById("editGender").value;
-  const contact = document.getElementById("editContact").value;
-  const email = document.getElementById("editEmail").value;
-  const address = document.getElementById("editAddress").value;
+  const hasDetailedFields = !!document.getElementById("editFirstName");
 
-  if (!validator.name(name)) return toast("Invalid name");
-  if (!validator.age(age)) return toast("Age must be greater than 0");
-  if (!validator.gender(gender)) return toast("Select gender");
-  if (!validator.contact(contact)) return toast("Contact must be 10 digits");
-  if (!validator.email(email || "")) return toast("Invalid email");
+  if (hasDetailedFields) {
+    const id         = document.getElementById("editPid").value;
+    const firstName  = document.getElementById("editFirstName").value.trim();
+    const lastName   = document.getElementById("editLastName").value.trim();
+    const age        = document.getElementById("editAge").value;
+    const gender     = document.getElementById("editGender").value;
+    const address    = document.getElementById("editAddress").value.trim();
+    const city       = document.getElementById("editCity").value.trim();
+    const state      = document.getElementById("editState").value.trim();
+    const pincode    = document.getElementById("editPincode").value.trim();
+    const bloodGroup = document.getElementById("editBloodGroup").value.trim();
+    const contact    = document.getElementById("editContact").value.trim();
+    const email      = document.getElementById("editEmail").value.trim();
 
-  const pts = storageAPI.getPatients();
-  const idx = pts.findIndex(p => p.id === id);
-  if (idx === -1) return toast("Patient not found");
+    // Validation
+    if (!validator.name(firstName)) return toast("Enter a valid first name");
+    if (!validator.age(age))        return toast("Age must be greater than 0");
+    if (!validator.gender(gender))  return toast("Select gender");
+    if (!validator.contact(contact))return toast("Contact must be 10 digits");
+    if (!validator.email(email || "")) return toast("Enter a valid email");
+    if (!/^\d{6}$/.test(pincode))   return toast("Enter a valid 6-digit pincode");
+    if (!bloodGroup)                return toast("Select blood group");
 
-  pts[idx] = { ...pts[idx], name, age, gender, contact, email, address };
-  storageAPI.setPatients(pts);
+    const fullName    = `${firstName} ${lastName}`.trim();
+    const fullAddress = `${address}, ${city}, ${state} - ${pincode}`;
+
+    const pts = storageAPI.getPatients();
+    const idx = pts.findIndex(p => p.id === id);
+    if (idx === -1) return toast("Patient not found");
+
+    pts[idx] = {
+      ...pts[idx],
+      firstName,
+      lastName,
+      name: fullName,
+      age,
+      gender,
+      contact,
+      email,
+      address: fullAddress,
+      city,
+      state,
+      pincode,
+      bloodGroup
+    };
+
+    storageAPI.setPatients(pts);
+  } else {
+    // Legacy modal save
+    const id      = document.getElementById("editPid").value;
+    const name    = document.getElementById("editName").value;
+    const age     = document.getElementById("editAge").value;
+    const gender  = document.getElementById("editGender").value;
+    const contact = document.getElementById("editContact").value;
+    const email   = document.getElementById("editEmail").value;
+    const address = document.getElementById("editAddress").value;
+
+    if (!validator.name(name))         return toast("Invalid name");
+    if (!validator.age(age))           return toast("Age must be greater than 0");
+    if (!validator.gender(gender))     return toast("Select gender");
+    if (!validator.contact(contact))   return toast("Contact must be 10 digits");
+    if (!validator.email(email || "")) return toast("Invalid email");
+
+    const pts = storageAPI.getPatients();
+    const idx = pts.findIndex(p => p.id === id);
+    if (idx === -1) return toast("Patient not found");
+
+    pts[idx] = { ...pts[idx], name, age, gender, contact, email, address };
+    storageAPI.setPatients(pts);
+  }
 
   const q = document.getElementById("patientSearch")?.value || "";
   renderPatientsTable(q);
-  if (location.hash === "#home") renderAppointmentsTable();
+  if (location.hash === "#home") {
+    renderAppointmentsTable();
+    updateDashboardStats(); // keep counts in sync if visible
+  }
   modal.hide();
   toast("Patient updated!");
 }
+
 function openPatientBookingsModal(patientId) {
   const bookingsDiv = document.getElementById("bookingsList");
   const appts = storageAPI.getAppointments().filter(a => a.patientId === patientId);
@@ -563,6 +721,7 @@ function openPatientBookingsModal(patientId) {
   const modal = new bootstrap.Modal(document.getElementById("patientBookingsModal"));
   modal.show();
 }
+
 function deletePatient(id) {
   if (!confirm("Delete this patient and their appointments?")) return;
 
@@ -574,7 +733,10 @@ function deletePatient(id) {
 
   const q = document.getElementById("patientSearch")?.value || "";
   renderPatientsTable(q);
-  if (location.hash === "#home") renderAppointmentsTable();
+  if (location.hash === "#home") {
+    renderAppointmentsTable();
+    updateDashboardStats(); // keep counts in sync if visible
+  }
   toast("Patient and their appointments deleted.");
 }
 
