@@ -116,6 +116,40 @@ function updateDashboardStats() {
 }
 
 // ===========================
+// SUBMITTING STATE (new)
+// ===========================
+function withSubmittingState(form, run) {
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const resetBtn  = form.querySelector('button[type="reset"]');
+
+  const originalHTML = submitBtn ? submitBtn.innerHTML : null;
+
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Processing…`;
+  }
+  if (resetBtn) resetBtn.disabled = true;
+  Array.from(form.elements).forEach(el => { if (el !== submitBtn && el !== resetBtn) el.disabled = true; });
+
+  const finish = () => {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalHTML;
+    }
+    if (resetBtn) resetBtn.disabled = false;
+    Array.from(form.elements).forEach(el => { if (el !== submitBtn && el !== resetBtn) el.disabled = false; });
+  };
+
+  try {
+    const maybePromise = run();
+    Promise.resolve(maybePromise).finally(finish);
+  } catch (e) {
+    finish();
+    throw e;
+  }
+}
+
+// ===========================
 // PATIENT REGISTRATION
 // ===========================
 function handlePatientForm() {
@@ -146,33 +180,35 @@ function handlePatientForm() {
     if (!/^\d{6}$/.test(pincode))   return toast("Enter valid 6-digit pincode");
     if (!bloodGroup)                return toast("Select blood group");
 
-    const fullAddress = `${address}, ${city}, ${state} - ${pincode}`;
+    withSubmittingState(form, () => {
+      const fullAddress = `${address}, ${city}, ${state} - ${pincode}`;
 
-    const patients = storageAPI.getPatients();
-    const newPatient = {
-      id: storageAPI.uid("p"),
-      firstName,
-      lastName,
-      name: `${firstName} ${lastName}`,
-      age,
-      gender,
-      contact,
-      email,
-      address: fullAddress,
-      city,
-      state,
-      pincode,
-      bloodGroup,
-      createdAt: new Date().toISOString(),
-    };
+      const patients = storageAPI.getPatients();
+      const newPatient = {
+        id: storageAPI.uid("p"),
+        firstName,
+        lastName,
+        name: `${firstName} ${lastName}`,
+        age,
+        gender,
+        contact,
+        email,
+        address: fullAddress,
+        city,
+        state,
+        pincode,
+        bloodGroup,
+        createdAt: new Date().toISOString(),
+      };
 
-    patients.push(newPatient);
-    storageAPI.setPatients(patients);
-    localStorage.setItem("lastRegisteredPatientId", newPatient.id);
+      patients.push(newPatient);
+      storageAPI.setPatients(patients);
+      localStorage.setItem("lastRegisteredPatientId", newPatient.id);
 
-    toast(`Patient Registered! ID: ${newPatient.id}`);
-    form.reset();
-    window.location.hash = "appointment";
+      toast(`Patient Registered! ID: ${newPatient.id}`);
+      form.reset();
+      window.location.hash = "appointment";
+    });
   });
 }
 
@@ -267,19 +303,21 @@ function handleApptFormSubmit() {
     if (!timeStr)   return toast("Select a time slot");
     if (isSlotTaken(doctorId, dateStr, timeStr)) return toast("This slot is already booked for the doctor");
 
-    const appts = storageAPI.getAppointments();
-    const newAppt = {
-      id: storageAPI.uid("a"),
-      patientId, departmentId: deptId, doctorId,
-      date: dateStr, time: timeStr,
-      createdAt: new Date().toISOString(),
-    };
-    appts.push(newAppt);
-    storageAPI.setAppointments(appts);
+    withSubmittingState(form, () => {
+      const appts = storageAPI.getAppointments();
+      const newAppt = {
+        id: storageAPI.uid("a"),
+        patientId, departmentId: deptId, doctorId,
+        date: dateStr, time: timeStr,
+        createdAt: new Date().toISOString(),
+      };
+      appts.push(newAppt);
+      storageAPI.setAppointments(appts);
 
-    toast("Appointment booked!");
-    form.reset();
-    window.location.hash = "home"; // routing will refresh stats
+      toast("Appointment booked!");
+      form.reset();
+      window.location.hash = "home"; // routing will refresh stats
+    });
   };
 }
 
@@ -351,8 +389,12 @@ function renderAppointmentsTable(filterText = "") {
       <td>${r.time}</td>
       <td>${badgeHTML(r.status)}</td>
       <td>
-        <button class="btn btn-sm btn-outline-primary" data-action="edit" data-id="${r.id}" title="Edit">✏️</button>
-        <button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="${r.id}" title="Delete">🗑️</button>
+        <button class="btn btn-sm btn-outline-primary" data-action="edit" data-id="${r.id}" title="Edit">
+          <i class="bi bi-pencil-square"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="${r.id}" title="Delete">
+          <i class="bi bi-trash"></i>
+        </button>
       </td>
     </tr>
   `).join("");
@@ -520,9 +562,15 @@ function renderPatientsTable(filterText = "") {
       <td>${p.email || "-"}</td>
       <td>${p.address || "-"}</td>
       <td class="d-flex gap-1">
-        <button class="btn btn-sm btn-outline-primary" data-paction="edit" data-id="${p.id}" title="Edit">✏️</button>
-        <button class="btn btn-sm btn-outline-danger" data-paction="delete" data-id="${p.id}" title="Delete">🗑️</button>
-        <button class="btn btn-sm btn-outline-secondary" data-paction="bookings" data-id="${p.id}" title="View Bookings">📖</button>
+        <button class="btn btn-sm btn-outline-primary" data-paction="edit" data-id="${p.id}" title="Edit">
+          <i class="bi bi-pencil-square"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-danger" data-paction="delete" data-id="${p.id}" title="Delete">
+          <i class="bi bi-trash"></i>
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" data-paction="bookings" data-id="${p.id}" title="View Bookings">
+          <i class="bi bi-journal-text"></i>
+        </button>
       </td>
     </tr>
   `).join("");
