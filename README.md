@@ -1,4 +1,4 @@
-# 🏥 Sterlo Hospital – Patient Registration & Appointment System
+# 🏥 Patient Registration & Appointment System
 
 A responsive single-page web application for managing patient registrations, appointments, and records — built using **HTML**, **CSS (Bootstrap 5 + Custom Theme)**, and **Vanilla JavaScript** with **LocalStorage** as the backend.
 
